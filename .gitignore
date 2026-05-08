@@ -1,0 +1,30 @@
+# ==========================================
+# Python & Environment
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+.conda/
+
+# ==========================================
+# Machine Learning Models (Milestone 2)
+# ==========================================
+# Ignore saved models to prevent massive merge conflicts
+*.pkl
+*.joblib
+*.h5
+*.model
+
+# ==========================================
+# IDEs & OS Specific
+# ==========================================
+.vscode/
+.ipynb_checkpoints/
+.DS_Store
+.DS_Store?
+._*
+.Trashes
+Thumbs.db
