@@ -2,10 +2,8 @@ import pandas as pd
 import numpy as np
 
 def load_and_merge_data(data_dir='Milestone 1 Data/'):
-    """
-    Loads and merges the 7 E-Learning datasets.
-    """
-    # 1. Load datasets using your exact VS Code filenames
+    
+    # Load datasets 
     assessments = pd.read_csv(f'{data_dir}assessments.csv')
     courses = pd.read_csv(f'{data_dir}courses.csv')
     student_assessments = pd.read_csv(f'{data_dir}StudentAssesments.csv')
@@ -16,8 +14,7 @@ def load_and_merge_data(data_dir='Milestone 1 Data/'):
 
     datasets = [assessments, courses, student_assessments, student_info, student_reg, student_vle, vle]
 
-    # 2. Standardize Column Names (Fixes the KeyError)
-    # The TAs used different abbreviations across different CSVs. This forces uniformity.
+    # 2. Standardize Column Names
     column_mapping = {
         'id_assessment': 'id_assess',
         'code_module': 'code_mod',
@@ -30,7 +27,7 @@ def load_and_merge_data(data_dir='Milestone 1 Data/'):
         # Replace the Open University '?' with standard NaN
         df.replace('?', np.nan, inplace=True)
 
-    # 3. Merge Strategy
+    # Merge Strategy
     df = student_assessments.copy()
 
     # Merge assessments 
@@ -43,7 +40,7 @@ def load_and_merge_data(data_dir='Milestone 1 Data/'):
     vle_agg = student_vle.groupby(['id_student', 'code_mod', 'code_pres'])['sum_click'].sum().reset_index()
     df = pd.merge(df, vle_agg, on=['id_student', 'code_mod', 'code_pres'], how='left')
 
-    # 4. Clean Target Variable
+    # Clean Target Variable
     df.dropna(subset=['score'], inplace=True)
     df['score'] = pd.to_numeric(df['score'], errors='coerce')
     

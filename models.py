@@ -6,13 +6,13 @@ import matplotlib.pyplot as plt
 def train_and_evaluate(X_train, X_test, y_train, y_test):
     results = {}
 
-    # Model 1: Linear Regression
+    # Linear Regression
     lr = LinearRegression()
     lr.fit(X_train, y_train)
     lr_preds = lr.predict(X_test)
     results['Linear Regression'] = lr_preds
 
-    # Model 2: Random Forest
+    # Random Forest
     rf = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
     rf.fit(X_train, y_train)
     rf_preds = rf.predict(X_test)
@@ -27,7 +27,7 @@ def train_and_evaluate(X_train, X_test, y_train, y_test):
         print(f"MSE: {mse:.4f} | MAE: {mae:.4f} | R2: {r2:.4f}\n")
 
     return results
-
+    # Plot Results
 def plot_results(y_test, predictions_dict):
     plt.figure(figsize=(12, 5))
     
