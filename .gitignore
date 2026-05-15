@@ -9,14 +9,7 @@ env/
 .venv/
 .conda/
 
-# ==========================================
-# Machine Learning Models (Milestone 2)
-# ==========================================
-# Ignore saved models to prevent massive merge conflicts
-*.pkl
-*.joblib
-*.h5
-*.model
+
 
 # ==========================================
 # IDEs & OS Specific

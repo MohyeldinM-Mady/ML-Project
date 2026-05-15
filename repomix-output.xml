@@ -1,0 +1,1485 @@
+This file is a merged representation of a subset of the codebase, containing files not matching ignore patterns, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching these patterns are excluded: **/*.csv
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.gitattributes
+.gitignore
+data_preparation.py
+main.py
+Milestone 1 Data/OULAD.names
+Milestone 2 Data/anonymisedData.zip
+Milestone 2 Data/OULAD.names
+Milestone 2 Data/oulad.zip
+plots/accuracy_comparison.png
+plots/DecisionTree_max_depth_tuning.png
+plots/DecisionTree_min_samples_split_tuning.png
+plots/GradientBoosting_learning_rate_tuning.png
+plots/GradientBoosting_n_estimators_tuning.png
+plots/RandomForest_max_depth_tuning.png
+plots/RandomForest_n_estimators_tuning.png
+plots/regression_results.png
+plots/test_time_comparison.png
+plots/training_time_comparison.png
+regression_data_loader.py
+regression_models.py
+regression_preprocessing.py
+run_regression.py
+test_classifier.py
+test_regression.py
+train_classifiers.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="data_preparation.py">
+"""
+Data Preparation & Feature Engineering
+E-Learning Student Performance Prediction - Milestone 2
+Merges all OULAD tables, engineers features, creates assessmentClass target.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+
+DATA_DIR = os.path.join(os.path.dirname(__file__), "Milestone 2 Data", "extracted")
+
+def load_raw_data():
+    """Load all raw CSV tables from the extracted OULAD dataset."""
+    courses = pd.read_csv(os.path.join(DATA_DIR, "courses.csv"))
+    assessments = pd.read_csv(os.path.join(DATA_DIR, "assessments.csv"))
+    student_info = pd.read_csv(os.path.join(DATA_DIR, "studentInfo.csv"))
+    student_reg = pd.read_csv(os.path.join(DATA_DIR, "studentRegistration.csv"))
+    student_assess = pd.read_csv(os.path.join(DATA_DIR, "studentAssessment.csv"))
+    # studentVle is very large; we aggregate it
+    print("Loading studentVle (large file)...")
+    student_vle = pd.read_csv(os.path.join(DATA_DIR, "studentVle.csv"))
+    vle = pd.read_csv(os.path.join(DATA_DIR, "vle.csv"))
+    return courses, assessments, student_info, student_reg, student_assess, student_vle, vle
+
+
+def create_assessment_class(score):
+    """Map numeric score to assessmentClass categories."""
+    if pd.isna(score):
+        return np.nan
+    if score < 40:
+        return "Fail"
+    elif score < 60:
+        return "Good"
+    elif score < 80:
+        return "Very Good"
+    else:
+        return "Excellent"
+
+
+def build_dataset():
+    """
+    Build the final merged dataset with engineered features and assessmentClass target.
+    Returns a DataFrame ready for classification.
+    """
+    courses, assessments, student_info, student_reg, student_assess, student_vle, vle = load_raw_data()
+
+    # --- Step 1: Merge studentAssessment with assessments to get context ---
+    sa = student_assess.merge(assessments, on="id_assessment", how="left")
+
+    # --- Step 2: Create assessmentClass from score, then drop score ---
+    sa["assessmentClass"] = sa["score"].apply(create_assessment_class)
+    sa = sa.dropna(subset=["assessmentClass"])  # Remove rows without valid class
+
+    # --- Step 3: Aggregate VLE interactions per student per module-presentation ---
+    print("Aggregating VLE interactions...")
+    vle_agg = student_vle.groupby(["id_student", "code_module", "code_presentation"]).agg(
+        total_clicks=("sum_click", "sum"),
+        num_vle_interactions=("sum_click", "count"),
+        avg_clicks_per_day=("sum_click", "mean"),
+        unique_days_active=("date", "nunique"),
+    ).reset_index()
+
+    # --- Step 4: Aggregate VLE activity types per student ---
+    vle_with_type = student_vle.merge(
+        vle[["id_site", "activity_type"]], on="id_site", how="left"
+    )
+    activity_counts = vle_with_type.groupby(
+        ["id_student", "code_module", "code_presentation", "activity_type"]
+    )["sum_click"].sum().unstack(fill_value=0).reset_index()
+    activity_counts.columns.name = None
+    # Prefix activity columns
+    act_cols = [c for c in activity_counts.columns if c not in ["id_student", "code_module", "code_presentation"]]
+    activity_counts = activity_counts.rename(columns={c: f"act_{c}" for c in act_cols})
+
+    # --- Step 5: Merge everything together ---
+    # Merge sa with student_info
+    df = sa.merge(student_info, on=["id_student", "code_module", "code_presentation"], how="left")
+
+    # Merge with courses
+    df = df.merge(courses, on=["code_module", "code_presentation"], how="left")
+
+    # Merge with student registration
+    df = df.merge(student_reg, on=["id_student", "code_module", "code_presentation"], how="left")
+
+    # Merge with VLE aggregates
+    df = df.merge(vle_agg, on=["id_student", "code_module", "code_presentation"], how="left")
+
+    # Merge with activity counts
+    df = df.merge(activity_counts, on=["id_student", "code_module", "code_presentation"], how="left")
+
+    # --- Step 6: Feature Engineering ---
+    # Submission delay: how many days before/after the deadline
+    df["submission_delay"] = df["date_submitted"] - df["date"]
+    
+    # Registration earliness
+    df["registration_earliness"] = -df["date_registration"]
+
+    # Is unregistered flag
+    df["is_unregistered"] = df["date_unregistration"].notna().astype(int)
+
+    # --- Step 7: Select final columns ---
+    # Drop score (as required), drop identifiers that shouldn't be features
+    drop_cols = ["score", "id_assessment", "id_student", "id_site",
+                 "date_unregistration", "date_registration", "final_result"]
+    for c in drop_cols:
+        if c in df.columns:
+            df = df.drop(columns=[c])
+
+    # --- Step 8: Save ---
+    output_path = os.path.join(os.path.dirname(__file__), "processed_dataset.csv")
+    df.to_csv(output_path, index=False)
+    print(f"\nProcessed dataset saved to: {output_path}")
+    print(f"Shape: {df.shape}")
+    print(f"\nTarget distribution:\n{df['assessmentClass'].value_counts()}")
+    print(f"\nColumns: {list(df.columns)}")
+    return df
+
+
+if __name__ == "__main__":
+    build_dataset()
+</file>
+
+<file path="regression_data_loader.py">
+import pandas as pd
+import numpy as np
+
+def load_and_merge_data(data_dir='Milestone 1 Data/'):
+    
+    # Load datasets 
+    assessments = pd.read_csv(f'{data_dir}assessments.csv')
+    courses = pd.read_csv(f'{data_dir}courses.csv')
+    student_assessments = pd.read_csv(f'{data_dir}StudentAssesments.csv')
+    student_info = pd.read_csv(f'{data_dir}studentInfo.csv')
+    student_reg = pd.read_csv(f'{data_dir}studentRegistration.csv')
+    student_vle = pd.read_csv(f'{data_dir}studentVle.csv')
+    vle = pd.read_csv(f'{data_dir}vle.csv') 
+
+    datasets = [assessments, courses, student_assessments, student_info, student_reg, student_vle, vle]
+
+    # 2. Standardize Column Names
+    column_mapping = {
+        'id_assessment': 'id_assess',
+        'code_module': 'code_mod',
+        'code_presentation': 'code_pres',
+        'code_presentat': 'code_pres'
+    }
+    
+    for df in datasets:
+        df.rename(columns=column_mapping, inplace=True)
+        # Replace the Open University '?' with standard NaN
+        df.replace('?', np.nan, inplace=True)
+
+    # Merge Strategy
+    df = student_assessments.copy()
+
+    # Merge assessments 
+    df = pd.merge(df, assessments, on='id_assess', how='left')
+
+    # Merge student_info 
+    df = pd.merge(df, student_info, on=['id_student', 'code_mod', 'code_pres'], how='left')
+
+    # Aggregate VLE clicks to see total engagement per student per module/presentation
+    vle_agg = student_vle.groupby(['id_student', 'code_mod', 'code_pres'])['sum_click'].sum().reset_index()
+    df = pd.merge(df, vle_agg, on=['id_student', 'code_mod', 'code_pres'], how='left')
+
+    # Clean Target Variable
+    df.dropna(subset=['score'], inplace=True)
+    df['score'] = pd.to_numeric(df['score'], errors='coerce')
+    
+    return df
+</file>
+
+<file path="regression_models.py">
+import os
+import pickle
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import matplotlib.pyplot as plt
+
+def train_and_evaluate(X_train, X_test, y_train, y_test):
+    results = {}
+    model_dir = "saved_models"
+    os.makedirs(model_dir, exist_ok=True)
+
+    # Linear Regression
+    lr = LinearRegression()
+    lr.fit(X_train, y_train)
+    lr_preds = lr.predict(X_test)
+    results['Linear Regression'] = lr_preds
+    with open(os.path.join(model_dir, "reg_model_lr.pkl"), "wb") as f:
+        pickle.dump(lr, f)
+
+    # Random Forest
+    rf = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
+    rf.fit(X_train, y_train)
+    rf_preds = rf.predict(X_test)
+    results['Random Forest'] = rf_preds
+    with open(os.path.join(model_dir, "reg_model_rf.pkl"), "wb") as f:
+        pickle.dump(rf, f)
+
+    # Evaluation
+    for name, preds in results.items():
+        mse = mean_squared_error(y_test, preds)
+        mae = mean_absolute_error(y_test, preds)
+        r2 = r2_score(y_test, preds)
+        print(f"--- {name} ---")
+        print(f"MSE: {mse:.4f} | MAE: {mae:.4f} | R2: {r2:.4f}\n")
+
+    return results
+
+def plot_results(y_test, predictions_dict):
+    plt.figure(figsize=(12, 5))
+    
+    for i, (name, preds) in enumerate(predictions_dict.items(), 1):
+        plt.subplot(1, 2, i)
+        plt.scatter(y_test, preds, alpha=0.3, color='blue' if i==1 else 'green')
+        plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'k--', lw=2)
+        plt.title(f'{name}: Actual vs Predicted')
+        plt.xlabel('Actual Score')
+        plt.ylabel('Predicted Score')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join("plots", "regression_results.png"))
+    print("Plot saved to plots/regression_results.png")
+</file>
+
+<file path="regression_preprocessing.py">
+import pandas as pd
+import pickle
+import os
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OrdinalEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+
+def preprocess_data(df, is_training=True):
+    target = 'score'
+    drop_cols = ['id_assessment', 'id_student', 'id_site', 'id_assess']
+    features_df = df.drop(columns=[col for col in drop_cols if col in df.columns], errors='ignore')
+    
+    y = features_df[target] if target in features_df.columns else None
+    X_raw = features_df.drop(columns=[target], errors='ignore')
+
+    num_cols = X_raw.select_dtypes(include=['int64', 'float64']).columns.tolist()
+    cat_cols = X_raw.select_dtypes(include=['object', 'bool']).columns.tolist()
+
+    model_dir = "saved_models"
+    os.makedirs(model_dir, exist_ok=True)
+    prep_path = os.path.join(model_dir, "reg_preprocessor.pkl")
+    cols_path = os.path.join(model_dir, "reg_columns.pkl")
+
+    if is_training:
+        num_transformer = SimpleImputer(strategy='median')
+        cat_transformer = Pipeline([
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("encoder", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1))
+        ])
+        
+        preprocessor = ColumnTransformer([
+            ("num", num_transformer, num_cols),
+            ("cat", cat_transformer, cat_cols)
+        ])
+        
+        X_processed = preprocessor.fit_transform(X_raw)
+        
+        with open(prep_path, "wb") as f:
+            pickle.dump(preprocessor, f)
+        with open(cols_path, "wb") as f:
+            pickle.dump({"num": num_cols, "cat": cat_cols}, f)
+            
+        return pd.DataFrame(X_processed, columns=num_cols + cat_cols), y
+    else:
+        # Load artifacts for unseen data
+        with open(prep_path, "rb") as f:
+            preprocessor = pickle.load(f)
+        with open(cols_path, "rb") as f:
+            cols = pickle.load(f)
+            
+        # Ensure all columns exist
+        for col in cols['num'] + cols['cat']:
+            if col not in X_raw.columns:
+                X_raw[col] = pd.NA
+                
+        X_raw = X_raw[cols['num'] + cols['cat']]
+        X_processed = preprocessor.transform(X_raw)
+        
+        return pd.DataFrame(X_processed, columns=cols['num'] + cols['cat']), y
+</file>
+
+<file path="run_regression.py">
+import pickle
+import os
+from regression_data_loader import load_and_merge_data
+from regression_preprocessing import preprocess_data
+from regression_models import train_and_evaluate, plot_results
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+
+def main():
+    os.makedirs("saved_models", exist_ok=True)
+    
+    print("1. Loading and merging datasets from the subfolder...")
+    raw_df = load_and_merge_data()
+
+    print("2. Preprocessing all features...")
+    X_processed, y = preprocess_data(raw_df, is_training=True)
+
+    print("3. Feature Selection...")
+    features_to_drop = ['region', 'gender', 'disability', 'imd_band', 'age_band'] 
+    X_selected = X_processed.drop(columns=features_to_drop, errors='ignore')
+
+    print("4. Splitting and Scaling...")
+    X_train, X_test, y_train, y_test = train_test_split(X_selected, y, test_size=0.2, random_state=42)
+    
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    
+    # Save the scaler for testing
+    with open(os.path.join("saved_models", "reg_scaler.pkl"), "wb") as f:
+        pickle.dump(scaler, f)
+
+    print("5. Training Models & Evaluating...")
+    predictions = train_and_evaluate(X_train_scaled, X_test_scaled, y_train, y_test)
+
+    print("6. Generating Plots...")
+    plot_results(y_test, predictions)
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="test_classifier.py">
+"""
+Test Script - Milestone 2
+E-Learning Student Performance Prediction
+
+Loads saved models and preprocessor, takes a new CSV file,
+handles missing values, and outputs predictions + metrics.
+
+Usage:
+    python test_classifier.py <path_to_test_csv>
+"""
+
+import pandas as pd
+import numpy as np
+import pickle
+import os
+import sys
+import time
+
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(SCRIPT_DIR, "saved_models")
+
+
+def load_artifacts():
+    """Load all saved artifacts: preprocessor, label encoder, feature columns."""
+    with open(os.path.join(MODELS_DIR, "preprocessor.pkl"), "rb") as f:
+        preprocessor = pickle.load(f)
+    with open(os.path.join(MODELS_DIR, "label_encoder.pkl"), "rb") as f:
+        label_encoder = pickle.load(f)
+    with open(os.path.join(MODELS_DIR, "feature_columns.pkl"), "rb") as f:
+        feature_info = pickle.load(f)
+    return preprocessor, label_encoder, feature_info
+
+
+def load_models():
+    """Load all saved best models."""
+    models = {}
+    for fname in os.listdir(MODELS_DIR):
+        if fname.endswith("_best.pkl"):
+            model_name = fname.replace("_best.pkl", "")
+            with open(os.path.join(MODELS_DIR, fname), "rb") as f:
+                models[model_name] = pickle.load(f)
+    return models
+
+
+def prepare_test_data(df, feature_info, preprocessor):
+    """
+    Prepare test data: ensure correct columns exist, handle missing values.
+    IMPORTANT: We never drop test rows - missing values are imputed by the preprocessor.
+    """
+    cat_cols = feature_info["cat_cols"]
+    num_cols = feature_info["num_cols"]
+    all_feature_cols = num_cols + cat_cols
+
+    # Check for target column
+    has_target = "assessmentClass" in df.columns
+    y_true = None
+    if has_target:
+        y_true = df["assessmentClass"]
+        df = df.drop(columns=["assessmentClass"])
+
+    # Ensure all expected columns exist (add missing ones as NaN)
+    for col in all_feature_cols:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    # Keep only the expected feature columns in correct order
+    df = df[all_feature_cols]
+
+    # The preprocessor handles missing values via SimpleImputer (fitted on training data)
+    X_processed = preprocessor.transform(df)
+
+    return X_processed, y_true, has_target
+
+
+def run_predictions(test_csv_path):
+    """Main prediction pipeline."""
+    print("=" * 60)
+    print("E-Learning Performance Prediction - Test Script")
+    print("=" * 60)
+
+    # Load artifacts
+    print("\nLoading saved models and preprocessor...")
+    preprocessor, label_encoder, feature_info = load_artifacts()
+    models = load_models()
+    print(f"Loaded models: {list(models.keys())}")
+
+    # Load test data
+    print(f"\nLoading test data from: {test_csv_path}")
+    df = pd.read_csv(test_csv_path)
+    print(f"Test data shape: {df.shape}")
+    print(f"Missing values:\n{df.isnull().sum()[df.isnull().sum() > 0]}")
+
+    # Prepare
+    X_test, y_true_raw, has_target = prepare_test_data(df, feature_info, preprocessor)
+
+    if has_target and y_true_raw is not None:
+        y_true = label_encoder.transform(y_true_raw)
+    else:
+        y_true = None
+
+    # Predict with each model
+    print("\n" + "=" * 60)
+    print("PREDICTIONS")
+    print("=" * 60)
+
+    all_predictions = {}
+    for model_name, model in models.items():
+        print(f"\n--- {model_name} ---")
+
+        t0 = time.time()
+        y_pred = model.predict(X_test)
+        test_time = time.time() - t0
+
+        y_pred_labels = label_encoder.inverse_transform(y_pred)
+        all_predictions[model_name] = y_pred_labels
+
+        print(f"Test time: {test_time:.4f}s")
+        print(f"Prediction distribution: {dict(pd.Series(y_pred_labels).value_counts())}")
+
+        if y_true is not None:
+            acc = accuracy_score(y_true, y_pred)
+            print(f"Accuracy: {acc:.4f}")
+            print(f"\nClassification Report:")
+            print(classification_report(y_true, y_pred, target_names=label_encoder.classes_))
+
+    # Save predictions to CSV
+    output_df = df.copy() if not has_target else pd.read_csv(test_csv_path)
+    for model_name, preds in all_predictions.items():
+        output_df[f"predicted_{model_name}"] = preds
+
+    output_path = os.path.join(SCRIPT_DIR, "test_predictions.csv")
+    output_df.to_csv(output_path, index=False)
+    print(f"\nPredictions saved to: {output_path}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python test_classifier.py <path_to_test_csv>")
+        print("Example: python test_classifier.py test_data.csv")
+        sys.exit(1)
+
+    test_csv_path = sys.argv[1]
+    if not os.path.exists(test_csv_path):
+        print(f"Error: File not found: {test_csv_path}")
+        sys.exit(1)
+
+    run_predictions(test_csv_path)
+</file>
+
+<file path="test_regression.py">
+import sys
+import os
+import pandas as pd
+import pickle
+from sklearn.metrics import mean_squared_error, r2_score
+from regression_preprocessing import preprocess_data
+
+def run_regression_test(test_csv_path):
+    print("=" * 60)
+    print("Running Unseen REGRESSION Evaluation")
+    print("=" * 60)
+    
+    # Load raw data
+    df = pd.read_csv(test_csv_path)
+    
+    # Apply saved preprocessing (is_training=False prevents data leakage)
+    X_processed, y_true = preprocess_data(df, is_training=False)
+    
+    # Drop demographic noise identically to training
+    features_to_drop = ['region', 'gender', 'disability', 'imd_band', 'age_band'] 
+    X_selected = X_processed.drop(columns=features_to_drop, errors='ignore')
+    
+    # Load and apply the saved scaler
+    with open(os.path.join("saved_models", "reg_scaler.pkl"), "rb") as f:
+        scaler = pickle.load(f)
+    X_scaled = scaler.transform(X_selected)
+    
+    # Load models
+    with open(os.path.join("saved_models", "reg_model_lr.pkl"), "rb") as f:
+        lr_model = pickle.load(f)
+    with open(os.path.join("saved_models", "reg_model_rf.pkl"), "rb") as f:
+        rf_model = pickle.load(f)
+        
+    models = {"Linear Regression": lr_model, "Random Forest": rf_model}
+    
+    for name, model in models.items():
+        preds = model.predict(X_scaled)
+        print(f"\n--- {name} ---")
+        if y_true is not None:
+            mse = mean_squared_error(y_true, preds)
+            r2 = r2_score(y_true, preds)
+            print(f"MSE: {mse:.4f}")
+            print(f"R2 Score: {r2:.4f}")
+        else:
+            print("No 'score' column found in test data. Outputting raw predictions only.")
+            print(preds[:10])
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Error: Provide the path to the unseen regression CSV.")
+        sys.exit(1)
+    run_regression_test(sys.argv[1])
+</file>
+
+<file path="train_classifiers.py">
+"""
+Milestone 2 - Classification Training Script
+E-Learning Student Performance Prediction
+
+Trains 3 classifiers (Random Forest, GradientBoosting, DecisionTree) with hyperparameter tuning.
+Saves trained models, preprocessor, and label encoder using pickle.
+Generates bar charts for accuracy, training time, and test time.
+"""
+
+import pandas as pd
+import numpy as np
+import pickle
+import time
+import os
+import warnings
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler, OrdinalEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.tree import DecisionTreeClassifier
+
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+warnings.filterwarnings("ignore")
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+RANDOM_STATE = 42
+TEST_SIZE = 0.2
+OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(OUTPUT_DIR, "saved_models")
+PLOTS_DIR = os.path.join(OUTPUT_DIR, "plots")
+os.makedirs(MODELS_DIR, exist_ok=True)
+os.makedirs(PLOTS_DIR, exist_ok=True)
+
+# ============================================================
+# 1. LOAD & PREPARE DATA
+# ============================================================
+def load_and_prepare():
+    print("=" * 60, flush=True)
+    print("STEP 1: Loading and Preparing Data", flush=True)
+    print("=" * 60, flush=True)
+
+    df = pd.read_csv(os.path.join(OUTPUT_DIR, "processed_dataset.csv"))
+    print(f"Dataset shape: {df.shape}")
+
+    # Target
+    TARGET = "assessmentClass"
+    y_raw = df[TARGET]
+    X = df.drop(columns=[TARGET])
+
+    # Identify column types
+    cat_cols = X.select_dtypes(include=["object"]).columns.tolist()
+    num_cols = X.select_dtypes(include=["number"]).columns.tolist()
+
+    print(f"Categorical features ({len(cat_cols)}): {cat_cols}")
+    print(f"Numerical features ({len(num_cols)}): {num_cols}")
+
+    # Encode target
+    le = LabelEncoder()
+    y = le.fit_transform(y_raw)
+    print(f"Classes: {list(le.classes_)}")
+    print(f"Class distribution: {dict(zip(le.classes_, np.bincount(y)))}")
+
+    # Build preprocessor
+    num_transformer = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+    cat_transformer = Pipeline([
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("encoder", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)),
+    ])
+    preprocessor = ColumnTransformer([
+        ("num", num_transformer, num_cols),
+        ("cat", cat_transformer, cat_cols),
+    ])
+
+    # Split 80/20
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y
+    )
+    print(f"\nTrain size: {X_train.shape[0]}, Test size: {X_test.shape[0]}")
+
+    # Fit preprocessor on training data
+    X_train_proc = preprocessor.fit_transform(X_train)
+    X_test_proc = preprocessor.transform(X_test)
+
+    # Save preprocessor, label encoder, and column info
+    with open(os.path.join(MODELS_DIR, "preprocessor.pkl"), "wb") as f:
+        pickle.dump(preprocessor, f)
+    with open(os.path.join(MODELS_DIR, "label_encoder.pkl"), "wb") as f:
+        pickle.dump(le, f)
+    with open(os.path.join(MODELS_DIR, "feature_columns.pkl"), "wb") as f:
+        pickle.dump({"cat_cols": cat_cols, "num_cols": num_cols}, f)
+
+    print("Preprocessor & LabelEncoder saved.")
+    return X_train_proc, X_test_proc, y_train, y_test, le
+
+
+# ============================================================
+# 2. DEFINE MODELS & HYPERPARAMETERS
+# ============================================================
+def get_model_configs():
+    """
+    Returns a dict of model configs. Each model has a base config
+    and hyperparameter variations (at least 2 hyperparams, 3 values each).
+    """
+    configs = {}
+
+    # --- Random Forest ---
+    configs["RandomForest"] = {
+        "base_params": {"random_state": RANDOM_STATE, "n_jobs": -1},
+        "hyperparam_1": {
+            "name": "n_estimators",
+            "values": [50, 100, 200],
+            "fixed_other": {"max_depth": 15},
+        },
+        "hyperparam_2": {
+            "name": "max_depth",
+            "values": [5, 15, 30],
+            "fixed_other": {"n_estimators": 100},
+        },
+        "model_class": RandomForestClassifier,
+    }
+
+    # --- Gradient Boosting ---
+    configs["GradientBoosting"] = {
+        "base_params": {"random_state": RANDOM_STATE},
+        "hyperparam_1": {
+            "name": "n_estimators",
+            "values": [50, 100, 200],
+            "fixed_other": {"learning_rate": 0.1, "max_depth": 3},
+        },
+        "hyperparam_2": {
+            "name": "learning_rate",
+            "values": [0.01, 0.1, 0.3],
+            "fixed_other": {"n_estimators": 100, "max_depth": 3},
+        },
+        "model_class": GradientBoostingClassifier,
+    }
+
+    # --- Decision Tree ---
+    configs["DecisionTree"] = {
+        "base_params": {"random_state": RANDOM_STATE},
+        "hyperparam_1": {
+            "name": "max_depth",
+            "values": [5, 15, 30],
+            "fixed_other": {"min_samples_split": 5},
+        },
+        "hyperparam_2": {
+            "name": "min_samples_split",
+            "values": [2, 5, 10],
+            "fixed_other": {"max_depth": 15},
+        },
+        "model_class": DecisionTreeClassifier,
+    }
+
+    return configs
+
+
+# ============================================================
+# 3. TRAIN & EVALUATE
+# ============================================================
+def train_and_evaluate(X_train, X_test, y_train, y_test, le):
+    print("\n" + "=" * 60)
+    print("STEP 2: Training & Evaluating Classifiers")
+    print("=" * 60)
+
+    configs = get_model_configs()
+    all_results = []          # For summary bar charts
+    hyperparam_results = {}   # For detailed hyperparameter analysis
+    best_models = {}          # Store best model per algorithm
+
+    for model_name, config in configs.items():
+        print(f"\n{'-' * 50}", flush=True)
+        print(f"  MODEL: {model_name}", flush=True)
+        print(f"{'-' * 50}", flush=True)
+
+        model_class = config["model_class"]
+        base_params = config["base_params"]
+        best_acc = 0
+        best_model = None
+        hp_results = {}
+
+        for hp_key in ["hyperparam_1", "hyperparam_2"]:
+            hp_config = config[hp_key]
+            hp_name = hp_config["name"]
+            hp_values = hp_config["values"]
+            fixed = hp_config["fixed_other"]
+
+            hp_results[hp_name] = {"values": [], "accuracies": [], "train_times": [], "test_times": []}
+
+            print(f"\n  Varying '{hp_name}': {hp_values}  (fixed: {fixed})", flush=True)
+
+            for val in hp_values:
+                params = {**base_params, **fixed, hp_name: val}
+                model = model_class(**params)
+
+                # Train
+                t0 = time.time()
+                model.fit(X_train, y_train)
+                train_time = time.time() - t0
+
+                # Test
+                t0 = time.time()
+                y_pred = model.predict(X_test)
+                test_time = time.time() - t0
+
+                acc = accuracy_score(y_test, y_pred)
+                hp_results[hp_name]["values"].append(val)
+                hp_results[hp_name]["accuracies"].append(acc)
+                hp_results[hp_name]["train_times"].append(train_time)
+                hp_results[hp_name]["test_times"].append(test_time)
+
+                print(f"    {hp_name}={str(val):>10} | Acc: {acc:.4f} | Train: {train_time:.2f}s | Test: {test_time:.2f}s", flush=True)
+
+                if acc > best_acc:
+                    best_acc = acc
+                    best_model = model
+
+        # Save best model
+        best_models[model_name] = best_model
+        model_path = os.path.join(MODELS_DIR, f"{model_name}_best.pkl")
+        with open(model_path, "wb") as f:
+            pickle.dump(best_model, f)
+        print(f"\n  Best {model_name} accuracy: {best_acc:.4f} (saved)")
+
+        # Get final metrics on best model
+        y_pred = best_model.predict(X_test)
+        t0 = time.time()
+        best_model.predict(X_test)
+        final_test_time = time.time() - t0
+
+        all_results.append({
+            "Model": model_name,
+            "Accuracy": best_acc,
+            "Train Time (s)": max(hp_results[list(hp_results.keys())[0]]["train_times"]),
+            "Test Time (s)": final_test_time,
+        })
+
+        # Classification report
+        print(f"\n  Classification Report ({model_name}):")
+        print(classification_report(y_test, y_pred, target_names=le.classes_))
+
+        hyperparam_results[model_name] = hp_results
+
+    return all_results, hyperparam_results, best_models
+
+
+# ============================================================
+# 4. GENERATE PLOTS
+# ============================================================
+def generate_plots(all_results, hyperparam_results):
+    print("\n" + "=" * 60)
+    print("STEP 3: Generating Plots")
+    print("=" * 60)
+
+    results_df = pd.DataFrame(all_results)
+    colors = ["#2196F3", "#4CAF50", "#FF9800"]
+
+    # --- Bar Chart 1: Classification Accuracy ---
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bars = ax.bar(results_df["Model"], results_df["Accuracy"], color=colors, edgecolor="black", width=0.5)
+    for bar, val in zip(bars, results_df["Accuracy"]):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005,
+                f"{val:.4f}", ha="center", va="bottom", fontweight="bold", fontsize=12)
+    ax.set_ylabel("Accuracy", fontsize=12)
+    ax.set_title("Classification Accuracy Comparison", fontsize=14, fontweight="bold")
+    ax.set_ylim(0, 1.05)
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(PLOTS_DIR, "accuracy_comparison.png"), dpi=150)
+    plt.close()
+
+    # --- Bar Chart 2: Training Time ---
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bars = ax.bar(results_df["Model"], results_df["Train Time (s)"], color=colors, edgecolor="black", width=0.5)
+    for bar, val in zip(bars, results_df["Train Time (s)"]):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                f"{val:.2f}s", ha="center", va="bottom", fontweight="bold", fontsize=12)
+    ax.set_ylabel("Training Time (seconds)", fontsize=12)
+    ax.set_title("Total Training Time Comparison", fontsize=14, fontweight="bold")
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(PLOTS_DIR, "training_time_comparison.png"), dpi=150)
+    plt.close()
+
+    # --- Bar Chart 3: Test Time ---
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bars = ax.bar(results_df["Model"], results_df["Test Time (s)"], color=colors, edgecolor="black", width=0.5)
+    for bar, val in zip(bars, results_df["Test Time (s)"]):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.001,
+                f"{val:.4f}s", ha="center", va="bottom", fontweight="bold", fontsize=12)
+    ax.set_ylabel("Test Time (seconds)", fontsize=12)
+    ax.set_title("Total Test Time Comparison", fontsize=14, fontweight="bold")
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(PLOTS_DIR, "test_time_comparison.png"), dpi=150)
+    plt.close()
+
+    # --- Hyperparameter Tuning Plots ---
+    for model_name, hp_data in hyperparam_results.items():
+        for hp_name, data in hp_data.items():
+            fig, ax = plt.subplots(figsize=(7, 4))
+            x_labels = [str(v) for v in data["values"]]
+            bars = ax.bar(x_labels, data["accuracies"], color="#7E57C2", edgecolor="black", width=0.4)
+            for bar, val in zip(bars, data["accuracies"]):
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.003,
+                        f"{val:.4f}", ha="center", va="bottom", fontsize=10)
+            ax.set_xlabel(hp_name, fontsize=11)
+            ax.set_ylabel("Accuracy", fontsize=11)
+            ax.set_title(f"{model_name}: Effect of {hp_name}", fontsize=13, fontweight="bold")
+            ax.set_ylim(0, 1.05)
+            ax.grid(axis="y", alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(os.path.join(PLOTS_DIR, f"{model_name}_{hp_name}_tuning.png"), dpi=150)
+            plt.close()
+
+    print(f"All plots saved to: {PLOTS_DIR}")
+
+
+# ============================================================
+# MAIN
+# ============================================================
+if __name__ == "__main__":
+    X_train, X_test, y_train, y_test, le = load_and_prepare()
+    all_results, hp_results, best_models = train_and_evaluate(X_train, X_test, y_train, y_test, le)
+    generate_plots(all_results, hp_results)
+
+    print("\n" + "=" * 60)
+    print("TRAINING COMPLETE")
+    print("=" * 60)
+    print(f"Models saved in: {MODELS_DIR}")
+    print(f"Plots saved in:  {PLOTS_DIR}")
+    print("\nSummary:")
+    for r in all_results:
+        print(f"  {r['Model']:25s} | Accuracy: {r['Accuracy']:.4f} | Train: {r['Train Time (s)']:.2f}s | Test: {r['Test Time (s)']:.4f}s")
+</file>
+
+<file path=".gitattributes">
+*.csv filter=lfs diff=lfs merge=lfs -text
+</file>
+
+<file path=".gitignore">
+# ==========================================
+# Python & Environment
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+.conda/
+
+# ==========================================
+# Machine Learning Models (Milestone 2)
+# ==========================================
+# Ignore saved models to prevent massive merge conflicts
+*.pkl
+*.joblib
+*.h5
+*.model
+
+# ==========================================
+# IDEs & OS Specific
+# ==========================================
+.vscode/
+.ipynb_checkpoints/
+.DS_Store
+.DS_Store?
+._*
+.Trashes
+Thumbs.db
+</file>
+
+<file path="main.py">
+import sys
+import subprocess
+
+def main():
+    print("="*60)
+    print("E-Learning Student Performance Predictor")
+    print("="*60)
+    print("1. Run Milestone 1: Regression Pipeline (Train & Predict)")
+    print("2. Run Milestone 2: Classification Pipeline (Train & Predict)")
+    print("3. Run Milestone 2: Test Script (Evaluate unseen CLASSIFICATION data)")
+    print("4. Run Milestone 1: Test Script (Evaluate unseen REGRESSION data)")
+    print("0. Exit")
+    print("-" * 60)
+    
+    choice = input("Enter your choice (0-4): ")
+    
+    if choice == '1':
+        print("\n[Starting Regression Pipeline...]")
+        subprocess.run([sys.executable, "run_regression.py"])
+        
+    elif choice == '2':
+        print("\n[Starting Classification Training Pipeline...]")
+        subprocess.run([sys.executable, "train_classifiers.py"])
+        
+    elif choice == '3':
+        test_file = input("Enter the path to the unseen CLASSIFICATION CSV: ")
+        print(f"\n[Running Classification Evaluation on {test_file}...]")
+        subprocess.run([sys.executable, "test_classifier.py", test_file])
+        
+    elif choice == '4':
+        test_file = input("Enter the path to the unseen REGRESSION CSV: ")
+        print(f"\n[Running Regression Evaluation on {test_file}...]")
+        subprocess.run([sys.executable, "test_regression.py", test_file])
+        
+    elif choice == '0':
+        print("Exiting...")
+        sys.exit(0)
+    else:
+        print("Invalid choice. Please run the script again.")
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="Milestone 1 Data/OULAD.names">
+1. Title of Database: Open University Learning Analytics dataset
+
+2. Sources:
+
+   (a) Original owners of database:
+  The Open University
+  Walton Hall, Milton Keynes
+  MK7 6AA
+  United Kingdom
+  contact: Zdenek Zdrahal (zdenek.zdrahal@open.ac.uk)
+
+   (b) Donor of database:
+  Jakub Kuzilek (jakub.kuzilek@gmail.com)
+  Knowledge Media Institute, The Open University
+  Walton Hall, Milton Keynes, MK7 6AA, UK
+  CIIRC, CTU in Prague
+  Zikova 1903/4, Prague, CZ
+  Martin Hlosta (martin.hlosta@open.ac.uk)
+  Knowledge Media Institute, The Open University
+  Walton Hall, Milton Keynes, MK7 6AA, UK
+  Zdenek Zdrahal (zdenek.zdrahal@open.ac.uk)
+  Knowledge Media Institute, The Open University
+  Walton Hall, Milton Keynes, MK7 6AA, UK
+  CIIRC, CTU in Prague
+  Zikova 1903/4, Prague, CZ
+
+   (c) Date received: December 2015
+
+
+3. Past Usage:
+  - none -
+
+4. Relevant Information Paragraph:
+
+    Open University Learning Analytics Dataset (OULAD) contains data about 
+    courses, students and their interactions with Virtual Learning 
+    Environment (VLE) for seven selected courses (called modules). Presentations
+    of courses start in February and October - they are marked by "B" and "J" 
+    respectively. The dataset consists of tables connected using unique 
+    identifiers. Dataset is stored in several csv files.  
+    
+    More information, examples and news can be found at: 
+      https://analyse.kmi.open.ac.uk/open_dataset
+
+5. Number of Instances: 
+    - students in courses: 32953
+    - course-presentations: 22
+    - VLE pages: 6364
+    - VLE log entries: 10655280
+    - registration entries: 32953
+    - assessments: 206
+    - assessment entries: 173912
+
+
+6. Number of Attributes: 43
+
+
+7. Attribute information:
+   Name		              Data Type	  Meas.	 Description
+	 ----                 ---------   -----  -------------------------------------
+   -----------------------------------------------------------------------------
+   courses.csv
+   -----------------------------------------------------------------------------
+   code_module          nominal            code name of the module, which serves 
+                                           as the identifier
+   code_presentation    nominal            code name of the presentation. It 
+                                           consists of the year and “B” for the 
+                                           presentation starting in February and 
+                                           “J” for the presentation starting 
+                                           in October
+   length               integer     days   length of the module-presentation 
+                                           in days
+   -----------------------------------------------------------------------------                                      
+   assessments.csv
+   -----------------------------------------------------------------------------
+   code_module          nominal            identification code of the module, 
+                                           to which the assessment belongs
+   code_presentation    nominal            identification code of the 
+                                           presentation, to which the assessment 
+                                           belongs
+   id_assessment        integer            identification number of the 
+                                           assessment
+   assessment_type      nominal            type of assessment
+   date                 integer     days   information about the final 
+                                           submission date of the assessment 
+                                           calculated as the number of days 
+                                           since the start of the 
+                                           module-presentation. The starting 
+                                           date of the presentation has 
+                                           number 0 (zero)
+   weight               integer    %       weight of the assessment in %. 
+                                           Typically, Exams are treated separa-
+                                           tely and have the weight 100%; 
+                                           the sum of all other assessments 
+                                           is 100%
+   -----------------------------------------------------------------------------                                      
+   vle.csv
+   -----------------------------------------------------------------------------
+   id_site              integer            an identification number 
+                                           of the material
+   code_module          nominal            an identification code for module
+   code_presentation    nominal            the identification code of presenta-
+                                           tion
+   activity_type        nominal            the role associated with the module 
+                                           material
+   week_from            integer    week    the week from which the material 
+                                           is planned to be used
+   week_to              integer    week    week until which the material is 
+                                           planned to be used
+   -----------------------------------------------------------------------------
+   studentInfo.csv
+   -----------------------------------------------------------------------------
+   code_module          nominal            an identification code for a module 
+                                           on which the student is registered
+   code_presentation    nominal            the identification code of the 
+                                           presentation during which the student 
+                                           is registered on the module
+   id_student           integer            a unique identification number 
+                                           for the student
+   gender               nominal            the student’s gender
+   region               nominal            identifies the geographic region, 
+                                           where the student lived while taking 
+                                           the module-presentation
+   highest_education    nominal            highest student education level 
+                                           on entry to the module presentation
+   imd_band             nominal            specifies the Index of Multiple 
+                                           Depravation band of the place where 
+                                           the student lived during 
+                                           the module-presentation
+   age_band             nominal            band of the student’s age
+   num_of_prev_attempts integer            the number times the student has 
+                                           attempted this module
+   studied_credits      integer            the total number of credits for the 
+                                           modules the student is currently 
+                                           studying
+   disability           nominal            indicates whether the student has 
+                                           declared a disability
+   final_result         nominal            student’s final result in the 
+                                           module-presentation
+   -----------------------------------------------------------------------------                                        
+   studentRegistration.csv
+   -----------------------------------------------------------------------------
+   code_module          nominal            an identification code for a module
+   code_presentation    nominal            the identification code 
+                                           of the presentation
+   id_student           integer            a unique identification number 
+                                           for the student
+   date_registration    integer    days    the date of student’s registration on
+                                           the module presentation, this is the 
+                                           number of days measured relative to 
+                                           the start of the module-presentation 
+                                           (e.g. the negative value -30 means 
+                                           that the student registered to module
+                                           presentation 30 days before 
+                                           it started)
+   date_unregistration  integer    days    date of student unregistration from 
+                                           the module presentation, this is the 
+                                           number of days measured relative to 
+                                           the start of the module-presentation.
+                                           Students, who completed the course 
+                                           have this field empty. Students who 
+                                           unregistered have Withdrawal as the 
+                                           value of the final_result column in 
+                                           the studentInfo.csv file
+   -----------------------------------------------------------------------------                                       
+   studentAssessment.csv
+   -----------------------------------------------------------------------------
+   id_assessment        integer            the identification number 
+                                           of the assessment
+   id_student           integer            a unique identification number 
+                                           for the student
+   date_submitted       integer    days    the date of student submission, 
+                                           measured as the number of days since 
+                                           the start of the module presentation
+   is_banked            integer            a status flag indicating that the 
+                                           assessment result has been 
+                                           transferred from a previous 
+                                           presentation
+   score                integer            the student’s score in 
+                                           this assessment. The range is from
+                                           0 to 100. The score lower than 40 is 
+                                           interpreted as Fail. The marks are in
+                                           the range from 0 to 100
+   -----------------------------------------------------------------------------
+   studentVle.csv
+   -----------------------------------------------------------------------------
+   code_module          nominal            an identification code for a module
+   code_presentation    nominal            the identification code of the 
+                                           module presentation
+   id_student           integer            a unique identification number 
+                                           for the student
+   id_site              integer            an identification number for the 
+                                           VLE material
+   date                 integer    days    the date of student’s interaction 
+                                           with the material measured as the 
+                                           number of days since the start of 
+                                           the module-presentation
+   sum_click            integer            the number of times a student 
+                                           interacts with the material in 
+                                           that day 
+
+8. Missing Attribute Values: Yes
+
+
+9. Class Distribution:
+
+	Class	      Examples
+	----------- ---------
+	Distinction 3024
+  Fail        7052 
+  Pass        12361
+  Withdrawn   10156
+  ----------- ---------
+  Total       32593
+</file>
+
+<file path="Milestone 2 Data/OULAD.names">
+1. Title of Database: Open University Learning Analytics dataset
+
+2. Sources:
+
+   (a) Original owners of database:
+  The Open University
+  Walton Hall, Milton Keynes
+  MK7 6AA
+  United Kingdom
+  contact: Zdenek Zdrahal (zdenek.zdrahal@open.ac.uk)
+
+   (b) Donor of database:
+  Jakub Kuzilek (jakub.kuzilek@gmail.com)
+  Knowledge Media Institute, The Open University
+  Walton Hall, Milton Keynes, MK7 6AA, UK
+  CIIRC, CTU in Prague
+  Zikova 1903/4, Prague, CZ
+  Martin Hlosta (martin.hlosta@open.ac.uk)
+  Knowledge Media Institute, The Open University
+  Walton Hall, Milton Keynes, MK7 6AA, UK
+  Zdenek Zdrahal (zdenek.zdrahal@open.ac.uk)
+  Knowledge Media Institute, The Open University
+  Walton Hall, Milton Keynes, MK7 6AA, UK
+  CIIRC, CTU in Prague
+  Zikova 1903/4, Prague, CZ
+
+   (c) Date received: December 2015
+
+
+3. Past Usage:
+  - none -
+
+4. Relevant Information Paragraph:
+
+    Open University Learning Analytics Dataset (OULAD) contains data about 
+    courses, students and their interactions with Virtual Learning 
+    Environment (VLE) for seven selected courses (called modules). Presentations
+    of courses start in February and October - they are marked by "B" and "J" 
+    respectively. The dataset consists of tables connected using unique 
+    identifiers. Dataset is stored in several csv files.  
+    
+    More information, examples and news can be found at: 
+      https://analyse.kmi.open.ac.uk/open_dataset
+
+5. Number of Instances: 
+    - students in courses: 32953
+    - course-presentations: 22
+    - VLE pages: 6364
+    - VLE log entries: 10655280
+    - registration entries: 32953
+    - assessments: 206
+    - assessment entries: 173912
+
+
+6. Number of Attributes: 43
+
+
+7. Attribute information:
+   Name		              Data Type	  Meas.	 Description
+	 ----                 ---------   -----  -------------------------------------
+   -----------------------------------------------------------------------------
+   courses.csv
+   -----------------------------------------------------------------------------
+   code_module          nominal            code name of the module, which serves 
+                                           as the identifier
+   code_presentation    nominal            code name of the presentation. It 
+                                           consists of the year and “B” for the 
+                                           presentation starting in February and 
+                                           “J” for the presentation starting 
+                                           in October
+   length               integer     days   length of the module-presentation 
+                                           in days
+   -----------------------------------------------------------------------------                                      
+   assessments.csv
+   -----------------------------------------------------------------------------
+   code_module          nominal            identification code of the module, 
+                                           to which the assessment belongs
+   code_presentation    nominal            identification code of the 
+                                           presentation, to which the assessment 
+                                           belongs
+   id_assessment        integer            identification number of the 
+                                           assessment
+   assessment_type      nominal            type of assessment
+   date                 integer     days   information about the final 
+                                           submission date of the assessment 
+                                           calculated as the number of days 
+                                           since the start of the 
+                                           module-presentation. The starting 
+                                           date of the presentation has 
+                                           number 0 (zero)
+   weight               integer    %       weight of the assessment in %. 
+                                           Typically, Exams are treated separa-
+                                           tely and have the weight 100%; 
+                                           the sum of all other assessments 
+                                           is 100%
+   -----------------------------------------------------------------------------                                      
+   vle.csv
+   -----------------------------------------------------------------------------
+   id_site              integer            an identification number 
+                                           of the material
+   code_module          nominal            an identification code for module
+   code_presentation    nominal            the identification code of presenta-
+                                           tion
+   activity_type        nominal            the role associated with the module 
+                                           material
+   week_from            integer    week    the week from which the material 
+                                           is planned to be used
+   week_to              integer    week    week until which the material is 
+                                           planned to be used
+   -----------------------------------------------------------------------------
+   studentInfo.csv
+   -----------------------------------------------------------------------------
+   code_module          nominal            an identification code for a module 
+                                           on which the student is registered
+   code_presentation    nominal            the identification code of the 
+                                           presentation during which the student 
+                                           is registered on the module
+   id_student           integer            a unique identification number 
+                                           for the student
+   gender               nominal            the student’s gender
+   region               nominal            identifies the geographic region, 
+                                           where the student lived while taking 
+                                           the module-presentation
+   highest_education    nominal            highest student education level 
+                                           on entry to the module presentation
+   imd_band             nominal            specifies the Index of Multiple 
+                                           Depravation band of the place where 
+                                           the student lived during 
+                                           the module-presentation
+   age_band             nominal            band of the student’s age
+   num_of_prev_attempts integer            the number times the student has 
+                                           attempted this module
+   studied_credits      integer            the total number of credits for the 
+                                           modules the student is currently 
+                                           studying
+   disability           nominal            indicates whether the student has 
+                                           declared a disability
+   final_result         nominal            student’s final result in the 
+                                           module-presentation
+   -----------------------------------------------------------------------------                                        
+   studentRegistration.csv
+   -----------------------------------------------------------------------------
+   code_module          nominal            an identification code for a module
+   code_presentation    nominal            the identification code 
+                                           of the presentation
+   id_student           integer            a unique identification number 
+                                           for the student
+   date_registration    integer    days    the date of student’s registration on
+                                           the module presentation, this is the 
+                                           number of days measured relative to 
+                                           the start of the module-presentation 
+                                           (e.g. the negative value -30 means 
+                                           that the student registered to module
+                                           presentation 30 days before 
+                                           it started)
+   date_unregistration  integer    days    date of student unregistration from 
+                                           the module presentation, this is the 
+                                           number of days measured relative to 
+                                           the start of the module-presentation.
+                                           Students, who completed the course 
+                                           have this field empty. Students who 
+                                           unregistered have Withdrawal as the 
+                                           value of the final_result column in 
+                                           the studentInfo.csv file
+   -----------------------------------------------------------------------------                                       
+   studentAssessment.csv
+   -----------------------------------------------------------------------------
+   id_assessment        integer            the identification number 
+                                           of the assessment
+   id_student           integer            a unique identification number 
+                                           for the student
+   date_submitted       integer    days    the date of student submission, 
+                                           measured as the number of days since 
+                                           the start of the module presentation
+   is_banked            integer            a status flag indicating that the 
+                                           assessment result has been 
+                                           transferred from a previous 
+                                           presentation
+   score                integer            the student’s score in 
+                                           this assessment. The range is from
+                                           0 to 100. The score lower than 40 is 
+                                           interpreted as Fail. The marks are in
+                                           the range from 0 to 100
+   -----------------------------------------------------------------------------
+   studentVle.csv
+   -----------------------------------------------------------------------------
+   code_module          nominal            an identification code for a module
+   code_presentation    nominal            the identification code of the 
+                                           module presentation
+   id_student           integer            a unique identification number 
+                                           for the student
+   id_site              integer            an identification number for the 
+                                           VLE material
+   date                 integer    days    the date of student’s interaction 
+                                           with the material measured as the 
+                                           number of days since the start of 
+                                           the module-presentation
+   sum_click            integer            the number of times a student 
+                                           interacts with the material in 
+                                           that day 
+
+8. Missing Attribute Values: Yes
+
+
+9. Class Distribution:
+
+	Class	      Examples
+	----------- ---------
+	Distinction 3024
+  Fail        7052 
+  Pass        12361
+  Withdrawn   10156
+  ----------- ---------
+  Total       32593
+</file>
+
+</files>
