@@ -15,7 +15,7 @@ A central hub for interacting with the project. Running `main.py` provides an in
 ### 2. Comprehensive Data Preprocessing pipelines
 - **Data Merging (`data_preparation.py`, `regression_data_loader.py`)**: Combines multiple complex datasets including student info, assessments, course details, registrations, and large-scale VLE interaction logs.
 - **Feature Engineering**: Calculates insightful metrics such as submission delays, registration earliness, and aggregates daily clicks and activity types in the virtual learning environment.
-- **Automated Pipelines (`regression_preprocessing.py`, `train_classifiers.py`)**: Employs scikit-learn `Pipeline` and `ColumnTransformer` to handle missing value imputation, standard scaling for numerical features, and ordinal/label encoding for categorical data to prevent data leakage during testing.
+- **Automated Pipelines (`regression_preprocessing.py`, `train_classifiers.py`)**: Employs scikit-learn `Pipeline` and `ColumnTransformer` to handle missing value imputation, standard scaling for numerical features, and ordinal/label encoding for categorical data for preprocessing. The classification preprocessor is fitted on training data; the regression preprocessing currently occurs before the train/test split (see evaluation limitations below).
 
 ### 3. Milestone 1: Regression Pipeline
 Predicts a continuous student `score` using regression algorithms.
@@ -27,7 +27,7 @@ Predicts a continuous student `score` using regression algorithms.
 ### 4. Milestone 2: Classification Pipeline
 Categorizes student performance into descriptive classes (`Fail`, `Good`, `Very Good`, `Excellent`) based on their assessment scores.
 - **Models Used**: Decision Tree Classifier, Random Forest Classifier, and Gradient Boosting Classifier.
-- **Hyperparameter Tuning**: Automatically trains and searches across a grid of parameters (e.g., `n_estimators`, `max_depth`, `learning_rate`) to find the most optimal configuration.
+- **Hyperparameter Tuning**: Runs one-parameter-at-a-time sweeps (e.g., `n_estimators`, `max_depth`, `learning_rate`) while holding another parameter fixed, and selects a model using test-set accuracy. This is not cross-validated grid search.
 - **Evaluation**: Uses Accuracy, Classification Reports (Precision, Recall, F1-Score), and records Training/Testing execution times.
 - **Visualizations**: Produces detailed bar charts comparing model accuracies, training/test times, and hyperparameter impacts (saved to the `plots/` directory).
 - **Scripts**: `train_classifiers.py`
@@ -35,7 +35,7 @@ Categorizes student performance into descriptive classes (`Fail`, `Good`, `Very 
 ### 5. Testing and Inference on Unseen Data
 Dedicated scripts to reliably process and generate predictions for new, unseen datasets.
 - Loads saved preprocessors, scalers, and the best-performing trained models from the `saved_models/` directory.
-- Drops demographic noise uniformly and prevents data leakage.
+- Applies the transformations implemented for each task; preprocessing and feature handling differ between the regression and classification paths.
 - Exports predictions to a CSV file (for classification) or prints metrics to the console.
 - **Scripts**: `test_regression.py`, `test_classifier.py`
 
@@ -92,3 +92,14 @@ ML-Project/
 
 3. **Running Evaluations (Options 3 & 4)**:
    If you choose to evaluate unseen data, the script will prompt you to enter the path to the unseen CSV file. Ensure the CSV format matches the training data format (minus the target column, which is optional).
+
+## Evaluation limitations
+
+This is an educational project. Reported model comparisons should be interpreted alongside the evaluation design:
+
+- `run_regression.py` fits imputation/encoding through `preprocess_data(..., is_training=True)` before splitting the dataset. This allows test-set information into preprocessing; fit the preprocessor on the training split before claiming leakage-free results.
+- `train_classifiers.py` fits preprocessing on its training split, but chooses the best hyperparameters using the same test set used for final reporting. A separate validation split or cross-validation and an untouched final holdout are needed for an independent estimate.
+- Saved charts and model artifacts show project outputs, not independently reproduced performance in a new environment. No deployment or real-world educational outcome is established here.
+- The `test_*.py` files are evaluation/inference scripts; they should not be presented as an automated unit-test suite. Only load pickle artifacts from a trusted source.
+
+Portfolio contact: [Mohyeldin M. Yakout](https://www.linkedin.com/in/mohyeldin-mady-yakout).
